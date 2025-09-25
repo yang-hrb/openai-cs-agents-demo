@@ -2,9 +2,9 @@
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![NextJS](https://img.shields.io/badge/Built_with-NextJS-blue)
-![OpenAI API](https://img.shields.io/badge/Powered_by-OpenAI_API-orange)
+![Perplexity API](https://img.shields.io/badge/Powered_by-Perplexity_API-8a2be2)
 
-This repository contains a demo of a Customer Service Agent interface built on top of the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/).
+This repository contains a demo of a Customer Service Agent interface built on top of the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/). The orchestration now uses [Perplexity's OpenAI-compatible API](https://docs.perplexity.ai/) for all model calls, so you only need a Perplexity API key to run it.
 It is composed of two parts:
 
 1. A python backend that handles the agent orchestration logic, implementing the Agents SDK [customer service example](https://github.com/openai/openai-agents-python/tree/main/examples/customer_service)
@@ -15,23 +15,23 @@ It is composed of two parts:
 
 ## How to use
 
-### Setting your OpenAI API key
+### Setting your Perplexity API key
 
-You can set your OpenAI API key in your environment variables by running the following command in your terminal:
-
-```bash
-export OPENAI_API_KEY=your_api_key
-```
-
-You can also follow [these instructions](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to set your OpenAI key at a global level.
-
-Alternatively, you can set the `OPENAI_API_KEY` environment variable in an `.env` file at the root of the `python-backend` folder. You will need to install the `python-dotenv` package to load the environment variables from the `.env` file. And then, add these lines of code to your app:
+The backend expects a Perplexity API key to be available as an environment variable. You can set it with:
 
 ```bash
-from dotenv import load_dotenv
-
-load_dotenv()
+export PERPLEXITY_API_KEY=your_api_key
 ```
+
+You can optionally point to a different Perplexity-compatible endpoint or override the default models by exporting the following variables:
+
+```bash
+export PERPLEXITY_API_BASE="https://api.perplexity.ai"  # only needed if you use a proxy
+export PERPLEXITY_MODEL="sonar"                         # model for all task-oriented agents
+export PERPLEXITY_GUARDRAIL_MODEL="sonar-small-chat"    # model for guardrail checks
+```
+
+If you prefer to keep your credentials in a local file, you can create a `.env` file inside the `python-backend` folder and load it at startup using [python-dotenv](https://pypi.org/project/python-dotenv/).
 
 ### Install dependencies
 
