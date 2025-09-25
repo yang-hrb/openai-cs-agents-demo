@@ -1,0 +1,74 @@
+Error: Chat API error: 502
+
+lib/api.ts (9:24) @ callChatAPI 
+
+
+   7 |       body: JSON.stringify({ conversation_id: conversationId, message }),
+   8 |     });
+>  9 |     if (!res.ok) throw new Error(`Chat API error: ${res.status}`);
+     |                        ^
+  10 |     return res.json();
+  11 |   } catch (err) {
+  12 |     console.error("Error sending message:", err);
+Call Stack
+2
+
+callChatAPI
+lib/api.ts (9:24)
+async handleSendMessage
+app/page.tsx (60:18)
+
+
+Runtime Error
+
+
+Error: Cannot read properties of null (reading 'current_agent')
+
+app/page.tsx (63:26) @ handleSendMessage
+
+
+  61 |
+  62 |     if (!conversationId) setConversationId(data.conversation_id);
+> 63 |     setCurrentAgent(data.current_agent);
+     |                          ^
+  64 |     setContext(data.context);
+  65 |     if (data.events) {
+  66 |       const stamped = data.events.map((e: any) => ({
+Call Stack
+1
+
+handleSendMessage
+app/page.tsx (63:26)
+
+
+[0]  ✓ Starting...
+[0] Attention: Next.js now collects completely anonymous telemetry regarding usage.
+[0] This information is used to shape Next.js' roadmap and prioritize features.
+[0] You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+[0] https://nextjs.org/telemetry
+[0] 
+[0]  ✓ Ready in 3.5s
+[1] INFO:     127.0.0.1:62529 - "GET / HTTP/1.1" 404 Not Found
+[1] INFO:     127.0.0.1:62529 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+[0]  ○ Compiling / ...
+[0]  ✓ Compiled / in 2.5s (1123 modules)
+[0]  GET /?id=a52cc61b-185a-4850-a04a-aafe3fb8b23d&vscodeBrowserReqId=1758828482248 200 in 2717ms
+[0]  ✓ Compiled in 80ms (534 modules)
+[0] (node:41789) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+[0] (Use `node --trace-deprecation ...` to show where the warning was created)
+[1] INFO:     127.0.0.1:62544 - "POST /chat HTTP/1.1" 200 OK
+[1] ERROR:api:Guardrail evaluation failed
+[1] Traceback (most recent call last):
+[1]   File "/Users/yangyu/github/openai-cs-agents-demo/python-backend/api.py", line 164, in chat_endpoint
+[1]     guardrail_decisions = await _evaluate_guardrails(message_text)
+[1]   File "/Users/yangyu/github/openai-cs-agents-demo/python-backend/api.py", line 99, in _evaluate_guardrails
+[1]     relevance, jailbreak = await asyncio.gather(
+[1]   File "/Users/yangyu/github/openai-cs-agents-demo/python-backend/main.py", line 155, in run_relevance_guardrail
+[1]     return await _run_guardrail(name="Relevance Guardrail", message=message, schema_description=schema)
+[1]   File "/Users/yangyu/github/openai-cs-agents-demo/python-backend/main.py", line 127, in _run_guardrail
+[1]     data = await chat(
+[1]   File "/Users/yangyu/github/openai-cs-agents-demo/python-backend/perplexity_client.py", line 26, in chat
+[1]     raise PerplexityError("PERPLEXITY_API_KEY environment variable is not set")
+[1] perplexity_client.PerplexityError: PERPLEXITY_API_KEY environment variable is not set
+[1] INFO:     127.0.0.1:62547 - "POST /chat HTTP/1.1" 502 Bad Gateway
+[1] INFO:     127.0.0.1:62553 - "GET /?id=a9737624-f8ac-461b-b21e-f33cca892588&vscodeBrowserReqId=1758828566261 HTTP/1.1" 404 Not Found
