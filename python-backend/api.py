@@ -1,38 +1,32 @@
-from fastapi import FastAPI
+import asyncio
+import logging
+import time
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from uuid import uuid4
-import time
-import logging
 
 from main import (
-    triage_agent,
-    faq_agent,
-    seat_booking_agent,
-    flight_status_agent,
-    cancellation_agent,
+    AGENT_REGISTRY,
+    ConversationState,
+    GuardrailDecision,
+    ToolInvocation,
     create_initial_context,
+    list_agents,
+    run_agent,
+    run_jailbreak_guardrail,
+    run_relevance_guardrail,
+    run_triage,
+    TOOL_REGISTRY,
 )
+from perplexity_client import PerplexityError
 
-from agents import (
-    Runner,
-    ItemHelpers,
-    MessageOutputItem,
-    HandoffOutputItem,
-    ToolCallItem,
-    ToolCallOutputItem,
-    InputGuardrailTripwireTriggered,
-    Handoff,
-)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
-
-# CORS configuration (adjust as needed for deployment)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -41,17 +35,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# Models
-# =========================
 
 class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     message: str
 
+
 class MessageResponse(BaseModel):
     content: str
     agent: str
+
 
 class AgentEvent(BaseModel):
     id: str
@@ -59,7 +52,8 @@ class AgentEvent(BaseModel):
     agent: str
     content: str
     metadata: Optional[Dict[str, Any]] = None
-    timestamp: Optional[float] = None
+    timestamp: float
+
 
 class GuardrailCheck(BaseModel):
     id: str
@@ -69,6 +63,7 @@ class GuardrailCheck(BaseModel):
     passed: bool
     timestamp: float
 
+
 class ChatResponse(BaseModel):
     conversation_id: str
     current_agent: str
@@ -76,272 +71,234 @@ class ChatResponse(BaseModel):
     events: List[AgentEvent]
     context: Dict[str, Any]
     agents: List[Dict[str, Any]]
-    guardrails: List[GuardrailCheck] = []
+    guardrails: List[GuardrailCheck]
 
-# =========================
-# In-memory store for conversation state
-# =========================
 
 class ConversationStore:
-    def get(self, conversation_id: str) -> Optional[Dict[str, Any]]:
-        pass
+    def get(self, conversation_id: str) -> Optional[ConversationState]:
+        raise NotImplementedError
 
-    def save(self, conversation_id: str, state: Dict[str, Any]):
-        pass
+    def save(self, conversation_id: str, state: ConversationState) -> None:
+        raise NotImplementedError
+
 
 class InMemoryConversationStore(ConversationStore):
-    _conversations: Dict[str, Dict[str, Any]] = {}
+    _store: Dict[str, ConversationState] = {}
 
-    def get(self, conversation_id: str) -> Optional[Dict[str, Any]]:
-        return self._conversations.get(conversation_id)
+    def get(self, conversation_id: str) -> Optional[ConversationState]:
+        return self._store.get(conversation_id)
 
-    def save(self, conversation_id: str, state: Dict[str, Any]):
-        self._conversations[conversation_id] = state
+    def save(self, conversation_id: str, state: ConversationState) -> None:
+        self._store[conversation_id] = state
 
-# TODO: when deploying this app in scale, switch to your own production-ready implementation
+
 conversation_store = InMemoryConversationStore()
 
-# =========================
-# Helpers
-# =========================
 
-def _get_agent_by_name(name: str):
-    """Return the agent object by name."""
-    agents = {
-        triage_agent.name: triage_agent,
-        faq_agent.name: faq_agent,
-        seat_booking_agent.name: seat_booking_agent,
-        flight_status_agent.name: flight_status_agent,
-        cancellation_agent.name: cancellation_agent,
-    }
-    return agents.get(name, triage_agent)
+async def _evaluate_guardrails(message: str) -> List[GuardrailDecision]:
+    relevance, jailbreak = await asyncio.gather(
+        run_relevance_guardrail(message),
+        run_jailbreak_guardrail(message),
+    )
+    return [relevance, jailbreak]
 
-def _get_guardrail_name(g) -> str:
-    """Extract a friendly guardrail name."""
-    name_attr = getattr(g, "name", None)
-    if isinstance(name_attr, str) and name_attr:
-        return name_attr
-    guard_fn = getattr(g, "guardrail_function", None)
-    if guard_fn is not None and hasattr(guard_fn, "__name__"):
-        return guard_fn.__name__.replace("_", " ").title()
-    fn_name = getattr(g, "__name__", None)
-    if isinstance(fn_name, str) and fn_name:
-        return fn_name.replace("_", " ").title()
-    return str(g)
 
-def _build_agents_list() -> List[Dict[str, Any]]:
-    """Build a list of all available agents and their metadata."""
-    def make_agent_dict(agent):
-        return {
-            "name": agent.name,
-            "description": getattr(agent, "handoff_description", ""),
-            "handoffs": [getattr(h, "agent_name", getattr(h, "name", "")) for h in getattr(agent, "handoffs", [])],
-            "tools": [getattr(t, "name", getattr(t, "__name__", "")) for t in getattr(agent, "tools", [])],
-            "input_guardrails": [_get_guardrail_name(g) for g in getattr(agent, "input_guardrails", [])],
-        }
+async def _execute_tool(invocation: ToolInvocation, state: ConversationState) -> str:
+    tool_info = TOOL_REGISTRY.get(invocation.name)
+    if not tool_info:
+        raise ValueError(f"Unknown tool requested: {invocation.name}")
+    func = tool_info["callable"]
+    args = invocation.arguments or {}
+    if tool_info.get("pass_context"):
+        return await func(state.context, **args)
+    return await func(**args)
+
+
+def _build_guardrail_checks(message: str, decisions: List[GuardrailDecision]) -> List[GuardrailCheck]:
+    timestamp = time.time() * 1000
     return [
-        make_agent_dict(triage_agent),
-        make_agent_dict(faq_agent),
-        make_agent_dict(seat_booking_agent),
-        make_agent_dict(flight_status_agent),
-        make_agent_dict(cancellation_agent),
+        GuardrailCheck(
+            id=uuid4().hex,
+            name=decision.name,
+            input=message,
+            reasoning=decision.reasoning,
+            passed=decision.passed,
+            timestamp=timestamp,
+        )
+        for decision in decisions
     ]
 
-# =========================
-# Main Chat Endpoint
-# =========================
+
+def _context_changes(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: after[key] for key in after if before.get(key) != after[key]}
+
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest):
-    """
-    Main chat endpoint for agent orchestration.
-    Handles conversation state, agent routing, and guardrail checks.
-    """
-    # Initialize or retrieve conversation state
+async def chat_endpoint(req: ChatRequest) -> ChatResponse:  # noqa: C901 - endpoint orchestration
     is_new = not req.conversation_id or conversation_store.get(req.conversation_id) is None
     if is_new:
-        conversation_id: str = uuid4().hex
-        ctx = create_initial_context()
-        current_agent_name = triage_agent.name
-        state: Dict[str, Any] = {
-            "input_items": [],
-            "context": ctx,
-            "current_agent": current_agent_name,
-        }
-        if req.message.strip() == "":
-            conversation_store.save(conversation_id, state)
-            return ChatResponse(
-                conversation_id=conversation_id,
-                current_agent=current_agent_name,
-                messages=[],
-                events=[],
-                context=ctx.model_dump(),
-                agents=_build_agents_list(),
-                guardrails=[],
-            )
+        conversation_id = uuid4().hex
+        state = ConversationState(context=create_initial_context())
+        conversation_store.save(conversation_id, state)
     else:
-        conversation_id = req.conversation_id  # type: ignore
+        conversation_id = req.conversation_id  # type: ignore[assignment]
         state = conversation_store.get(conversation_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
-    current_agent = _get_agent_by_name(state["current_agent"])
-    state["input_items"].append({"content": req.message, "role": "user"})
-    old_context = state["context"].model_dump().copy()
-    guardrail_checks: List[GuardrailCheck] = []
-
-    try:
-        result = await Runner.run(current_agent, state["input_items"], context=state["context"])
-    except InputGuardrailTripwireTriggered as e:
-        failed = e.guardrail_result.guardrail
-        gr_output = e.guardrail_result.output.output_info
-        gr_reasoning = getattr(gr_output, "reasoning", "")
-        gr_input = req.message
-        gr_timestamp = time.time() * 1000
-        for g in current_agent.input_guardrails:
-            guardrail_checks.append(GuardrailCheck(
-                id=uuid4().hex,
-                name=_get_guardrail_name(g),
-                input=gr_input,
-                reasoning=(gr_reasoning if g == failed else ""),
-                passed=(g != failed),
-                timestamp=gr_timestamp,
-            ))
-        refusal = "Sorry, I can only answer questions related to airline travel."
-        state["input_items"].append({"role": "assistant", "content": refusal})
+    message_text = req.message.strip()
+    if message_text == "":
         return ChatResponse(
             conversation_id=conversation_id,
-            current_agent=current_agent.name,
-            messages=[MessageResponse(content=refusal, agent=current_agent.name)],
+            current_agent=state.current_agent,
+            messages=[],
             events=[],
-            context=state["context"].model_dump(),
-            agents=_build_agents_list(),
+            context=state.context.model_dump(),
+            agents=list_agents(),
+            guardrails=[],
+        )
+
+    state.history.append({"role": "user", "content": message_text})
+
+    try:
+        guardrail_decisions = await _evaluate_guardrails(message_text)
+    except PerplexityError as exc:
+        logger.exception("Guardrail evaluation failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    guardrail_checks = _build_guardrail_checks(message_text, guardrail_decisions)
+    if any(not decision.passed for decision in guardrail_decisions):
+        refusal = "Sorry, I can only answer questions related to airline travel."
+        state.history.append({"role": "assistant", "agent": state.current_agent, "content": refusal})
+        conversation_store.save(conversation_id, state)
+        return ChatResponse(
+            conversation_id=conversation_id,
+            current_agent=state.current_agent,
+            messages=[MessageResponse(content=refusal, agent=state.current_agent)],
+            events=[],
+            context=state.context.model_dump(),
+            agents=list_agents(),
             guardrails=guardrail_checks,
         )
 
-    messages: List[MessageResponse] = []
+    try:
+        target_agent, routing_reason = await run_triage(state, message_text)
+        agent_result = await run_agent(agent_name=target_agent, state=state, user_message=message_text)
+    except PerplexityError as exc:
+        logger.exception("Perplexity request failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     events: List[AgentEvent] = []
+    messages: List[MessageResponse] = []
 
-    for item in result.new_items:
-        if isinstance(item, MessageOutputItem):
-            text = ItemHelpers.text_message_output(item)
-            messages.append(MessageResponse(content=text, agent=item.agent.name))
-            events.append(AgentEvent(id=uuid4().hex, type="message", agent=item.agent.name, content=text))
-        # Handle handoff output and agent switching
-        elif isinstance(item, HandoffOutputItem):
-            # Record the handoff event
-            events.append(
-                AgentEvent(
-                    id=uuid4().hex,
-                    type="handoff",
-                    agent=item.source_agent.name,
-                    content=f"{item.source_agent.name} -> {item.target_agent.name}",
-                    metadata={"source_agent": item.source_agent.name, "target_agent": item.target_agent.name},
-                )
-            )
-            # If there is an on_handoff callback defined for this handoff, show it as a tool call
-            from_agent = item.source_agent
-            to_agent = item.target_agent
-            # Find the Handoff object on the source agent matching the target
-            ho = next(
-                (h for h in getattr(from_agent, "handoffs", [])
-                 if isinstance(h, Handoff) and getattr(h, "agent_name", None) == to_agent.name),
-                None,
-            )
-            if ho:
-                fn = ho.on_invoke_handoff
-                fv = fn.__code__.co_freevars
-                cl = fn.__closure__ or []
-                if "on_handoff" in fv:
-                    idx = fv.index("on_handoff")
-                    if idx < len(cl) and cl[idx].cell_contents:
-                        cb = cl[idx].cell_contents
-                        cb_name = getattr(cb, "__name__", repr(cb))
-                        events.append(
-                            AgentEvent(
-                                id=uuid4().hex,
-                                type="tool_call",
-                                agent=to_agent.name,
-                                content=cb_name,
-                            )
-                        )
-            current_agent = item.target_agent
-        elif isinstance(item, ToolCallItem):
-            tool_name = getattr(item.raw_item, "name", None)
-            raw_args = getattr(item.raw_item, "arguments", None)
-            tool_args: Any = raw_args
-            if isinstance(raw_args, str):
-                try:
-                    import json
-                    tool_args = json.loads(raw_args)
-                except Exception:
-                    pass
-            events.append(
-                AgentEvent(
-                    id=uuid4().hex,
-                    type="tool_call",
-                    agent=item.agent.name,
-                    content=tool_name or "",
-                    metadata={"tool_args": tool_args},
-                )
-            )
-            # If the tool is display_seat_map, send a special message so the UI can render the seat selector.
-            if tool_name == "display_seat_map":
-                messages.append(
-                    MessageResponse(
-                        content="DISPLAY_SEAT_MAP",
-                        agent=item.agent.name,
-                    )
-                )
-        elif isinstance(item, ToolCallOutputItem):
-            events.append(
-                AgentEvent(
-                    id=uuid4().hex,
-                    type="tool_output",
-                    agent=item.agent.name,
-                    content=str(item.output),
-                    metadata={"tool_result": item.output},
-                )
-            )
-
-    new_context = state["context"].dict()
-    changes = {k: new_context[k] for k in new_context if old_context.get(k) != new_context[k]}
-    if changes:
+    previous_agent = state.current_agent
+    if previous_agent != target_agent:
         events.append(
             AgentEvent(
                 id=uuid4().hex,
-                type="context_update",
-                agent=current_agent.name,
-                content="",
-                metadata={"changes": changes},
+                type="handoff",
+                agent=previous_agent,
+                content=f"{previous_agent} -> {target_agent}",
+                metadata={
+                    "source_agent": previous_agent,
+                    "target_agent": target_agent,
+                    "reason": routing_reason,
+                },
+                timestamp=time.time() * 1000,
+            )
+        )
+    state.current_agent = target_agent
+
+    for invocation in agent_result.tool_calls:
+        before = state.context.model_dump()
+        try:
+            result = await _execute_tool(invocation, state)
+        except Exception as error:  # noqa: BLE001
+            logger.exception("Tool execution failed")
+            result = f"Tool {invocation.name} failed: {error}"
+        invocation.result = result
+        events.append(
+            AgentEvent(
+                id=uuid4().hex,
+                type="tool_call",
+                agent=target_agent,
+                content=invocation.name,
+                metadata={"tool_args": invocation.arguments},
+                timestamp=time.time() * 1000,
+            )
+        )
+        events.append(
+            AgentEvent(
+                id=uuid4().hex,
+                type="tool_output",
+                agent=target_agent,
+                content=str(result),
+                metadata={"tool_result": result},
+                timestamp=time.time() * 1000,
+            )
+        )
+        if isinstance(result, str) and result.strip().upper() == "DISPLAY_SEAT_MAP":
+            state.history.append({"role": "assistant", "agent": target_agent, "content": "DISPLAY_SEAT_MAP"})
+            messages.append(MessageResponse(content="DISPLAY_SEAT_MAP", agent=target_agent))
+            events.append(
+                AgentEvent(
+                    id=uuid4().hex,
+                    type="message",
+                    agent=target_agent,
+                    content="DISPLAY_SEAT_MAP",
+                    timestamp=time.time() * 1000,
+                )
+            )
+        after = state.context.model_dump()
+        changes = _context_changes(before, after)
+        if changes:
+            events.append(
+                AgentEvent(
+                    id=uuid4().hex,
+                    type="context_update",
+                    agent=target_agent,
+                    content="",
+                    metadata={"changes": changes},
+                    timestamp=time.time() * 1000,
+                )
+            )
+
+    for line in agent_result.messages:
+        state.history.append({"role": "assistant", "agent": target_agent, "content": line})
+        timestamp = time.time() * 1000
+        messages.append(MessageResponse(content=line, agent=target_agent))
+        events.append(
+            AgentEvent(
+                id=uuid4().hex,
+                type="message",
+                agent=target_agent,
+                content=line,
+                timestamp=timestamp,
             )
         )
 
-    state["input_items"] = result.to_input_list()
-    state["current_agent"] = current_agent.name
-    conversation_store.save(conversation_id, state)
-
-    # Build guardrail results: mark failures (if any), and any others as passed
-    final_guardrails: List[GuardrailCheck] = []
-    for g in getattr(current_agent, "input_guardrails", []):
-        name = _get_guardrail_name(g)
-        failed = next((gc for gc in guardrail_checks if gc.name == name), None)
-        if failed:
-            final_guardrails.append(failed)
-        else:
-            final_guardrails.append(GuardrailCheck(
+    if agent_result.handoff and agent_result.handoff in AGENT_REGISTRY:
+        next_agent = agent_result.handoff
+        events.append(
+            AgentEvent(
                 id=uuid4().hex,
-                name=name,
-                input=req.message,
-                reasoning="",
-                passed=True,
+                type="handoff",
+                agent=target_agent,
+                content=f"{target_agent} -> {next_agent}",
+                metadata={"source_agent": target_agent, "target_agent": next_agent},
                 timestamp=time.time() * 1000,
-            ))
+            )
+        )
+        state.current_agent = next_agent
+
+    conversation_store.save(conversation_id, state)
 
     return ChatResponse(
         conversation_id=conversation_id,
-        current_agent=current_agent.name,
+        current_agent=state.current_agent,
         messages=messages,
         events=events,
-        context=state["context"].dict(),
-        agents=_build_agents_list(),
-        guardrails=final_guardrails,
+        context=state.context.model_dump(),
+        agents=list_agents(),
+        guardrails=guardrail_checks,
     )

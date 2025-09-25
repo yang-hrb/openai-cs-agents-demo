@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   title: "Airlines Agent Orchestration",
   description: "An interface for airline agent orchestration",
   icons: {
-    icon: "/openai_logo.svg",
+    icon: "/perplexity_logo.svg",
   },
 };
 

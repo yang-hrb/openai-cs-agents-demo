@@ -2,40 +2,30 @@
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![NextJS](https://img.shields.io/badge/Built_with-NextJS-blue)
-![OpenAI API](https://img.shields.io/badge/Powered_by-OpenAI_API-orange)
+![Perplexity API](https://img.shields.io/badge/Powered_by-Perplexity_API-purple)
 
-This repository contains a demo of a Customer Service Agent interface built on top of the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/).
-It is composed of two parts:
+This repository showcases an airline customer-service simulation powered by Perplexity's chat completions API. The experience is split into two layers:
 
-1. A python backend that handles the agent orchestration logic, implementing the Agents SDK [customer service example](https://github.com/openai/openai-agents-python/tree/main/examples/customer_service)
-
-2. A Next.js UI allowing the visualization of the agent orchestration process and providing a chat interface.
+- **python-backend/** – FastAPI service that manages conversation state, runs guardrails, triages requests across specialist agents, and triggers tools such as seat changes or cancellations. All LLM traffic goes through `perplexity_client.py`.
+- **ui/** – Next.js 15 interface that visualizes the orchestration timeline, agent handoffs, and guardrail activity while exposing a customer chat window and seat-map selector.
 
 ![Demo Screenshot](screenshot.jpg)
 
 ## How to use
 
-### Setting your OpenAI API key
+### Environment variables
 
-You can set your OpenAI API key in your environment variables by running the following command in your terminal:
-
-```bash
-export OPENAI_API_KEY=your_api_key
-```
-
-You can also follow [these instructions](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to set your OpenAI key at a global level.
-
-Alternatively, you can set the `OPENAI_API_KEY` environment variable in an `.env` file at the root of the `python-backend` folder. You will need to install the `python-dotenv` package to load the environment variables from the `.env` file. And then, add these lines of code to your app:
+Export your Perplexity API key before starting the backend (or add it to an `.env` file that you source locally):
 
 ```bash
-from dotenv import load_dotenv
-
-load_dotenv()
+export PERPLEXITY_API_KEY=your_api_key
 ```
+
+Optionally set `PPLX_MODEL` if you want a different Perplexity model; it defaults to `sonar`.
 
 ### Install dependencies
 
-Install the dependencies for the backend by running the following commands:
+Install backend dependencies:
 
 ```bash
 cd python-backend
@@ -44,7 +34,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-For the UI, you can run:
+Install UI dependencies:
 
 ```bash
 cd ui
@@ -53,7 +43,7 @@ npm install
 
 ### Run the app
 
-You can either run the backend independently if you want to use a separate UI, or run both the UI and backend at the same time.
+You can run the FastAPI backend by itself, or launch the full stack via the Next.js workspace scripts.
 
 #### Run the backend independently
 
@@ -75,11 +65,25 @@ npm run dev
 
 The frontend will be available at: [http://localhost:3000](http://localhost:3000)
 
-This command will also start the backend.
+This command proxies API calls through Next.js and automatically launches the backend worker via `npm run dev:server`.
+
+### Project structure
+
+```
+python-backend/
+  api.py                # FastAPI routes and event serialization
+  main.py               # Agent prompts, guardrails, and tool registry
+  perplexity_client.py  # Shared Perplexity request helper
+ui/
+  app/                  # App Router pages
+  components/           # UI primitives (chat, agent panel, seat map)
+  lib/                  # Client helpers (API wrapper, types)
+  public/               # Static assets and icons
+```
 
 ## Customization
 
-This app is designed for demonstration purposes. Feel free to update the agent prompts, guardrails, and tools to fit your own customer service workflows or experiment with new use cases! The modular structure makes it easy to extend or modify the orchestration logic for your needs.
+The demo is designed for experimentation—tune agent prompts in `python-backend/main.py`, extend guardrail logic, or add new tools and UI panels to explore alternative customer-service flows.
 
 ## Demo Flows
 

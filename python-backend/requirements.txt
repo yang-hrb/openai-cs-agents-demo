@@ -1,4 +1,4 @@
-openai-agents
-pydantic
 fastapi
+httpx
+pydantic
 uvicorn
