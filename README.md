@@ -2,12 +2,12 @@
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![NextJS](https://img.shields.io/badge/Built_with-NextJS-blue)
-![OpenAI API](https://img.shields.io/badge/Powered_by-OpenAI_API-orange)
+![OpenRouter](https://img.shields.io/badge/Powered_by-OpenRouter_&_DeepSeek-purple)
 
-This repository contains a demo of a Customer Service Agent interface built on top of the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/).
+This repository contains a demo of a Customer Service Agent interface built on top of the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/), configured to use OpenRouter API with DeepSeek models.
 It is composed of two parts:
 
-1. A python backend that handles the agent orchestration logic, implementing the Agents SDK [customer service example](https://github.com/openai/openai-agents-python/tree/main/examples/customer_service)
+1. A python backend that handles the agent orchestration logic, implementing the Agents SDK [customer service example](https://github.com/openai/openai-agents-python/tree/main/examples/customer_service) with OpenRouter integration
 
 2. A Next.js UI allowing the visualization of the agent orchestration process and providing a chat interface.
 
@@ -15,23 +15,25 @@ It is composed of two parts:
 
 ## How to use
 
-### Setting your OpenAI API key
+### Setting your OpenRouter API key
 
-You can set your OpenAI API key in your environment variables by running the following command in your terminal:
+This application has been configured to use OpenRouter API with DeepSeek models instead of OpenAI API. You can set your OpenRouter API key in your environment variables by running the following command in your terminal:
 
 ```bash
-export OPENAI_API_KEY=your_api_key
+export OPENROUTER_API_KEY=your_openrouter_api_key
 ```
 
-You can also follow [these instructions](https://platform.openai.com/docs/libraries#create-and-export-an-api-key) to set your OpenAI key at a global level.
+You can get your OpenRouter API key from [https://openrouter.ai/keys](https://openrouter.ai/keys).
 
-Alternatively, you can set the `OPENAI_API_KEY` environment variable in an `.env` file at the root of the `python-backend` folder. You will need to install the `python-dotenv` package to load the environment variables from the `.env` file. And then, add these lines of code to your app:
+Alternatively, you can set the `OPENROUTER_API_KEY` environment variable in an `.env` file at the root of the `python-backend` folder. You will need to install the `python-dotenv` package to load the environment variables from the `.env` file. And then, add these lines of code to your app:
 
 ```bash
 from dotenv import load_dotenv
 
 load_dotenv()
 ```
+
+**Note:** All agents now use the DeepSeek model (`deepseek/deepseek-chat`) via OpenRouter instead of OpenAI's GPT models.
 
 ### Install dependencies
 
