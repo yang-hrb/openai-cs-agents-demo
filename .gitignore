@@ -133,3 +133,8 @@ node_modules/
 # ui stuff
 
 ui/.next/
+
+# Logs and process tracking
+backend.log
+frontend.log
+.pids
